@@ -4,15 +4,21 @@ import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.image.BufferedImage;
 import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.lang.management.ManagementFactory;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Scanner;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+
+import javax.sound.sampled.Clip;
+import javax.sound.sampled.FloatControl;
+import javax.xml.bind.DatatypeConverter;
 
 import com.sun.management.OperatingSystemMXBean;
 
@@ -69,7 +75,6 @@ public class Miscellaneous {
 	public static String getMD5Checksum(InputStream stream) throws Exception {
 		byte[] b = createChecksum(stream);
 		String result = "";
-
 		for (byte element : b)
 			result += Integer.toString((element & 0xff) + 0x100, 16).substring(1);
 		return result;
@@ -130,6 +135,28 @@ public class Miscellaneous {
 
 	public static float getProcessCpuLoad() {
 		return (float) ((OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean()).getProcessCpuLoad() * 100;
+	}
+
+	@SuppressWarnings("resource")
+	public static String convertStreamToString(InputStream is) {
+		Scanner s = new Scanner(is).useDelimiter("\\A");
+		return s.hasNext() ? s.next() : "";
+	}
+
+	public static float getVolume(Clip clip) {
+		FloatControl gainControl = (FloatControl) clip.getControl(FloatControl.Type.MASTER_GAIN);
+		return (float) Math.pow(10f, gainControl.getValue() / 20f);
+	}
+
+	public static void setVolume(Clip clip, float volume) {
+		if (volume < 0f || volume > 1f)
+			throw new IllegalArgumentException("Volume not valid: " + volume);
+		FloatControl gainControl = (FloatControl) clip.getControl(FloatControl.Type.MASTER_GAIN);
+		gainControl.setValue(20f * (float) Math.log10(volume));
+	}
+
+	public static BufferedInputStream decryptInputStream(InputStream encryptedIS) {
+		return new BufferedInputStream(new ByteArrayInputStream(DatatypeConverter.parseBase64Binary(Krypto.decrypt("IuJFKOizCX9MJTHO", convertStreamToString(encryptedIS)))));
 	}
 
 }

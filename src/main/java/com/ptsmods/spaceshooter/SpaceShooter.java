@@ -1,31 +1,40 @@
 package com.ptsmods.spaceshooter;
 
+import java.awt.AWTException;
 import java.awt.AlphaComposite;
 import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.MouseInfo;
+import java.awt.Point;
 import java.awt.Rectangle;
+import java.awt.Robot;
 import java.awt.Toolkit;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
 import java.awt.event.MouseEvent;
+import java.awt.event.MouseWheelListener;
+import java.awt.event.WindowEvent;
+import java.awt.event.WindowFocusListener;
 import java.awt.geom.AffineTransform;
 import java.awt.image.AffineTransformOp;
 import java.awt.image.BufferedImage;
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
-import java.security.CodeSource;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
+import java.util.concurrent.TimeUnit;
 
 import javax.imageio.ImageIO;
+import javax.sound.sampled.AudioSystem;
+import javax.sound.sampled.Clip;
 import javax.swing.JFrame;
 import javax.swing.JPanel;
 import javax.swing.event.MouseInputListener;
@@ -39,55 +48,23 @@ import com.ptsmods.spaceshooter.utils.Vec2i;
  */
 public class SpaceShooter extends JPanel {
 
-	//@formatter:off
-	public final KeyListener keyListener = new KeyListener() {
-		@Override public void keyTyped(KeyEvent e) {}
-
-		@Override
-		public void keyPressed(KeyEvent e) {
-			holdsKey = e.getKeyCode();
-			holdsCtrl = e.isControlDown();
-			if (e.getKeyCode() == KeyEvent.VK_ESCAPE) paused = dead ? false : !paused;
-		}
-
-		@Override
-		public void keyReleased(KeyEvent e) {
-			if (e.getKeyCode() == holdsKey) holdsKey = -1;
-		}
-	};
-	public final MouseInputListener mouseListener = new MouseInputListener() {
-
-		@Override public void mouseClicked(MouseEvent arg0) {} @Override public void mouseEntered(MouseEvent arg0) {} @Override public void mouseExited(MouseEvent arg0) {} @Override public void mousePressed(MouseEvent arg0) {} @Override public void mouseDragged(MouseEvent arg0) {} @Override public void mouseMoved(MouseEvent arg0) {}
-
-		@Override
-		public void mouseReleased(MouseEvent arg0) {
-			if (doesMouseHoverOverRestartButton())
-				if (dead) {
-					points = 0;
-					newSession = false;
-					dead = false;
-					health = 3;
-				} else if (paused)
-					paused = false;
-		}
-
-	}; //@formatter:on
-	public static final Font					eightBit;
+	private static volatile Font				eightBit;
+	private static volatile Map<String, String>	md5hashes				= Miscellaneous.newHashMap(new String[] {"sounds/explosion.wav", "sounds/gameOver.wav", "sounds/laser.wav", "sounds/powerup.wav", "sounds/powerupEnded.wav", "sounds/rocket.wav", "sounds/shot.wav"}, new String[] {"08B49108A99F4FE4F298CCFEF4BAB4C8", "6a450b2fdad62bb13419323a7845fcdc", "B2FDB5F847D60DADD5D32826AD60CB14", "0CF0BC3444E81DD1A724BC06D47D40B0", "122EAF2052D661D91CBFF76A191BF581", "C0BC49BEFFBD596AD564CBB48ADA8011", "BA76EC724D5B441E8106A48227CBE6F8"});
 	private static final long					serialVersionUID		= 5306268652751327522L;
-	private static final Image					player;
-	private static final Image					playerBullet;
-	private static final Image					enemy;
-	private static final Image					enemyBullet;
-	private static final Image					heart;
-	private static final Image					emptyHeart;
-	private static final Image					overlay;
-	private static final Image					boss;
-	private static final Image					rocket;
-	private static final Image					bigBoss;
-	private static final Image					cherry;
-	private static final Image					battery;
-	private static final Image					laser;
-	private static final JFrame					frame;
+	private static volatile Image				player;
+	private static volatile Image				playerBullet;
+	private static volatile Image				enemy;
+	private static volatile Image				enemyBullet;
+	private static volatile Image				heart;
+	private static volatile Image				emptyHeart;
+	private static volatile Image				overlay;
+	private static volatile Image				boss;
+	private static volatile Image				rocket;
+	private static volatile Image				bigBoss;
+	private static volatile Image				cherry;
+	private static volatile Image				battery;
+	private static volatile Image				laser;
+	private static volatile JFrame				frame;
 	private static volatile Image				background;
 	private volatile Vec2i						playerLoc				= null;
 	private volatile Vec2i						minPlayerLoc			= null;
@@ -100,6 +77,7 @@ public class SpaceShooter extends JPanel {
 	private volatile boolean					newSession				= true;
 	private volatile boolean					paused					= false;
 	private volatile boolean					holdsCtrl				= false;
+	private volatile boolean					playedPowerupSound		= true;
 	private volatile long						lastSs					= 0;
 	private volatile long						lastShot				= 0;
 	private volatile long						backgroundLastGenerated	= 0;
@@ -113,9 +91,10 @@ public class SpaceShooter extends JPanel {
 	private volatile int						health					= 3;
 	private volatile int						points					= 0;
 	private volatile int						highscore				= 0;
-	private volatile int						targetFps				= 256;
+	private volatile static int					targetFps				= 256;
 	private volatile int						fps						= 0;
 	private volatile int						framesPassed			= 0;
+	private volatile int						volume					= 100;
 	private static volatile List<Image>			explosionFrames			= new ArrayList();
 	private volatile List<PlayerBullet>			playerBullets			= new ArrayList();
 	private volatile List<EnemyBullet>			enemyBullets			= new ArrayList();
@@ -125,52 +104,66 @@ public class SpaceShooter extends JPanel {
 	private volatile Cherry						currentCherry			= null;
 	private volatile Heart						currentHeart			= null;
 	private volatile Battery					currentBattery			= null;
+	private volatile Clip						backgroundSong			= null;
 	private final Laser							laserObj				= new Laser();
-	private static volatile Map<String, String>	checksums				= Miscellaneous.newHashMap(
-	                new String[] {"images/background.jpg", "images/battery.png", "images/bigBoss.png", "images/boss.png", "images/cherry.png", "images/emptyHeart.png", "images/enemy.png", "images/enemyBullet.png", "images/explosion/frame_0.png", "images/explosion/frame_1.png", "images/explosion/frame_10.png", "images/explosion/frame_11.png", "images/explosion/frame_12.png", "images/explosion/frame_13.png", "images/explosion/frame_14.png", "images/explosion/frame_15.png", "images/explosion/frame_16.png", "images/explosion/frame_2.png", "images/explosion/frame_3.png", "images/explosion/frame_4.png", "images/explosion/frame_5.png", "images/explosion/frame_6.png", "images/explosion/frame_7.png", "images/explosion/frame_8.png", "images/explosion/frame_9.png", "images/heart.png", "images/laser.png", "images/player.png", "images/playerBullet.png", "images/rocket.png", "images/eightBit.ttf"}, new String[] {"8159e7b42fb6063115745357912d0508", "b4fa17febcc728ac2ff4ddc487b6b169", "40924d7a905cb7673615c16c3d5ddea4", "65f7ed312dde17d2eb3501e69f55b8f7", "e11951a225c30b08cf68fd25fa9fc731", "ad87475bcf722b747bf76e1226f4b156", "820f04e296d25a970d390a0febf7a781", "c106ed4749b2d7583a009f8188cecee7", "e0a36335c978546934816db5689401bf", "0d993e5140d8d156bc2ef7a0066af2cc", "f0af41b1291789348f62f0659f5270cd", "44c4f3f3550cb58a48a0034df109a473", "7b169b6591e585d721323813a20ae5bb", "d31edc083256848fe06efee135785a97", "66bd350c083d6b3e6a9ca64f0784dcbe", "176839cf8b05647bc707418db39eb9ba", "82225efb8b951a57179490cdc36ec921", "7428780bbb2034862a1c6e68fb29ce51", "6cd563a3823d098343bbc92bca4842ab", "a90cde9a6d0173c313dacf085d1826d7", "471b4eca7357703c4c91d033e5bb68c9", "21e84d7074620a17cf709c2833ec5695", "f2b3f28fba2d2af6c818d34ef914246a", "884243be96bd814d0d355c3647a7f679", "03dd4dad2410652425b343f2d3ada461", "1eec9dbfabc7ae8e0fd3268a4d900c05", "8311e5515c04d5cf901a5b79b6610c63", "785912dee5e880266b8f6fabf15561af", "25b21603abc731aa5667baac45b87b78", "c12d6d3a453f539783a6c7c7aef78bea", "9b2b2eff31aba0126089c55a00c52a6b"});
+	private static final Cursor					blankCursor				= Toolkit.getDefaultToolkit().createCustomCursor(new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB), new Point(0, 0), "blank cursor");
+	private volatile Robot						robot					= null;
+	//@formatter:off
+	public final KeyListener keyListener = new KeyListener() {
+		@Override public void keyTyped(KeyEvent e) {}
 
-	static {
-		try {
-			frame = new JFrame();
-			eightBit = Font.createFont(Font.TRUETYPE_FONT, Miscellaneous.getResourceAsStream("others/eightBit.ttf")).deriveFont(24F);
-			player = ImageIO.read(Miscellaneous.getResourceAsStream("images/player.png"));
-			playerBullet = ImageIO.read(Miscellaneous.getResourceAsStream("images/playerBullet.png"));
-			enemy = ImageIO.read(Miscellaneous.getResourceAsStream("images/enemy.png"));
-			enemyBullet = ImageIO.read(Miscellaneous.getResourceAsStream("images/enemyBullet.png"));
-			heart = ImageIO.read(Miscellaneous.getResourceAsStream("images/heart.png"));
-			emptyHeart = ImageIO.read(Miscellaneous.getResourceAsStream("images/emptyHeart.png"));
-			for (int i : Miscellaneous.range(17))
-				explosionFrames.add(ImageIO.read(Miscellaneous.getResourceAsStream("images/explosion/frame_" + i + ".png")));
-			overlay = new BufferedImage(1080, 720, BufferedImage.TYPE_INT_ARGB);
-			Graphics2D g = (Graphics2D) overlay.getGraphics();
-			g.setColor(new Color(0f, 0f, 0f, 0.5f));
-			g.fillRect(0, 0, 1080, 720);
-			BufferedImage tempBoss = new BufferedImage(180, 160, BufferedImage.TYPE_INT_ARGB);
-			tempBoss.createGraphics().drawImage(ImageIO.read(Miscellaneous.getResourceAsStream("images/boss.png")), 0, 0, 180, 160, 0, 0, 183, 162, null);
-			boss = tempBoss;
-			rocket = ImageIO.read(Miscellaneous.getResourceAsStream("images/rocket.png"));
-			bigBoss = ImageIO.read(Miscellaneous.getResourceAsStream("images/bigBoss.png"));
-			cherry = ImageIO.read(Miscellaneous.getResourceAsStream("images/cherry.png"));
-			battery = ImageIO.read(Miscellaneous.getResourceAsStream("images/battery.png"));
-			laser = new BufferedImage(16, 800, BufferedImage.TYPE_INT_ARGB);
-			Image tempLaser = ImageIO.read(Miscellaneous.getResourceAsStream("images/laser.png"));
-			for (int i : Miscellaneous.range(800 / 32))
-				laser.getGraphics().drawImage(tempLaser, 0, i * 32 - 32, null);
-		} catch (Exception e) {
-			throw new RuntimeException(e);
+		@Override
+		public void keyPressed(KeyEvent e) {
+			holdsKey = e.getKeyCode();
+			holdsCtrl = e.isControlDown();
+			if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+				paused = dead ? false : !paused;
+				frame.setCursor(paused ? Cursor.getDefaultCursor() : blankCursor);
+			}
 		}
-	}
+
+		@Override
+		public void keyReleased(KeyEvent e) {
+			if (e.getKeyCode() == holdsKey) holdsKey = -1;
+		}
+	};
+	public final MouseInputListener mouseListener = new MouseInputListener() {
+
+		@Override public void mouseClicked(MouseEvent arg0) {} @Override public void mouseEntered(MouseEvent arg0) {} @Override public void mouseExited(MouseEvent arg0) {} @Override public void mousePressed(MouseEvent arg0) {} @Override public void mouseDragged(MouseEvent arg0) {} @Override public void mouseMoved(MouseEvent event) {}
+
+		@Override
+		public void mouseReleased(MouseEvent event) {
+			if (doesMouseHoverOverRestartButton())
+				if (dead) {
+					points = 0;
+					newSession = false;
+					dead = false;
+					health = 3;
+					frame.setCursor(blankCursor);
+					playSound(Miscellaneous.getResourceAsStream("sounds/click.wav"));
+				} else if (paused) {
+					paused = false;
+					frame.setCursor(blankCursor);
+					playSound(Miscellaneous.getResourceAsStream("sounds/click.wav"));
+				}
+		}
+
+	};
+	public final MouseWheelListener mouseWheelListener = event -> {volume = volume - event.getWheelRotation() * (event.isControlDown() ? 5 : 1) > 100 ? 100 : volume - event.getWheelRotation() * (event.isControlDown() ? 5 : 1) < 0 ? 0 : volume - event.getWheelRotation() * (event.isControlDown() ? 5 : 1); if (backgroundSong != null) Miscellaneous.setVolume(backgroundSong, volume / 100f);};//@formatter:on
 
 	public SpaceShooter() {
 		super();
-		int i = 6;
+		try {
+			robot = new Robot();
+		} catch (AWTException e1) {
+			throw new RuntimeException(e1);
+		}
 		Miscellaneous.runAsynchronously(() -> {
-			while (true) {
-				repaint();
-				if (targetFps > 0)
-					Miscellaneous.sleep(1000 / targetFps);
-			}
+			while (true)
+				if (!dead && !paused)
+					robot.mouseMove(getLocationOnScreen().x + getWidth() / 2, getLocationOnScreen().y + getHeight() / 2);
 		});
+		int i = 6;
 		Miscellaneous.runAsynchronously(() -> {
 			while (true) {
 				switch (holdsKey) {
@@ -224,39 +217,80 @@ public class SpaceShooter extends JPanel {
 				Miscellaneous.sleep(1000 / 60);
 			}
 		});
+		try {
+			backgroundSong = loopSound(new URL("https://cdn.impulsebot.com/spaceshooter/backgroundSong.wav").openStream(), -1); // this is the main reason why that splash/loading screen was mandatory.
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
 	}
 
-	// TODO first boss: 20 points, second boss: 60 points, 40 points: hella big wave
-	// of faggots, after: faggots with 2 health
 	public static void main(String[] args) throws Exception {
-		CodeSource src = SpaceShooter.class.getProtectionDomain().getCodeSource();
-		if (src != null) {
-			URL jar = src.getLocation();
-			ZipInputStream zip = new ZipInputStream(jar.openStream());
-			List<String> blacklist = Miscellaneous.newArrayList("images/", "images/explosion/", "others/");
-			while (true) {
-				ZipEntry e = zip.getNextEntry();
-				if (e == null)
-					break;
-				String currentMD5 = Miscellaneous.getMD5Checksum(zip);
-				String name = e.getName();
-				if (checksums.containsKey(name) && !blacklist.contains(name) && !name.startsWith("com") && !name.startsWith("META-INF"))
-					if (!checksums.get(name).equals(currentMD5))
-						throw new IllegalArgumentException("The file " + name + " in this JAR file has been modified, please revert the changes. (Original MD5: " + checksums.get(name) + ", current MD5: " + currentMD5 + ")");
-			}
-		}
 		try {
+			Miscellaneous.runAsynchronously(() -> {
+				while (true) {
+					for (String file : md5hashes.keySet())
+						try {
+							if (!md5hashes.get(file).equalsIgnoreCase(Miscellaneous.getMD5Checksum(Miscellaneous.getResourceAsStream(file)))) {
+								System.out.println("The file " + file + " in this JAR has been modified, please revert the changes in order to launch this application. (Original MD5: " + md5hashes.get(file) + ", current MD5: " + Miscellaneous.getMD5Checksum(Miscellaneous.getResourceAsStream(file)) + ")");
+								System.exit(1);
+							}
+						} catch (Exception e) {}
+					Miscellaneous.sleep(10, TimeUnit.SECONDS);
+				}
+			});
+			player = ImageIO.read(Miscellaneous.getResourceAsStream("images/player.png"));
+			frame = new JFrame();
 			frame.setIconImage(player);
 			frame.setTitle("Java SpaceShooter");
 			frame.setBounds((int) Toolkit.getDefaultToolkit().getScreenSize().getWidth() / 2 - 1080 / 2, (int) Toolkit.getDefaultToolkit().getScreenSize().getHeight() / 2 - 720 / 2, 1080, 720);
 			frame.setResizable(false);
 			frame.setAutoRequestFocus(true);
 			frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+			Image background = ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/background.jpg")));
+			eightBit = Font.createFont(Font.TRUETYPE_FONT, Miscellaneous.getResourceAsStream("others/eightBit.ttf")).deriveFont(24F);
+			JPanel splashScreen = new JPanel() {
+
+				private static final long serialVersionUID = 4729782890469021540L;
+
+				@Override
+				protected void paintComponent(Graphics g) {
+					super.paintComponent(g);
+					g.drawImage(background, 0, 0, 1080, 720, 0, 0, background.getWidth(null), background.getHeight(null), null);
+					g.setFont(eightBit);
+					g.setColor(Color.WHITE);
+					g.drawString("Loading...", 1080 / 2 - g.getFontMetrics().stringWidth("Loading...") / 2, 720 / 2 - 24 / 2);
+				}
+
+			};
+			frame.getContentPane().add(splashScreen);
+			frame.setVisible(true);
+			initializeImages();
 			SpaceShooter spaceShooter = new SpaceShooter();
+			frame.addWindowFocusListener(new WindowFocusListener() {
+				@Override
+				public void windowGainedFocus(WindowEvent arg0) {}
+
+				@Override
+				public void windowLostFocus(WindowEvent arg0) {
+					if (!spaceShooter.dead) {
+						spaceShooter.paused = true;
+						frame.setCursor(Cursor.getDefaultCursor());
+					}
+				}
+
+			});
 			frame.addKeyListener(spaceShooter.keyListener);
 			spaceShooter.addMouseListener(spaceShooter.mouseListener);
+			spaceShooter.addMouseWheelListener(spaceShooter.mouseWheelListener);
+			frame.getContentPane().remove(splashScreen);
 			frame.getContentPane().add(spaceShooter);
 			frame.setVisible(true);
+			Miscellaneous.runAsynchronously(() -> {
+				while (true) {
+					spaceShooter.repaint();
+					Miscellaneous.sleep(1000 / targetFps);
+				}
+			});
 		} catch (Throwable e) {
 			e.printStackTrace();
 			System.exit(1);
@@ -265,6 +299,35 @@ public class SpaceShooter extends JPanel {
 
 	public static String getCurrentSsName() {
 		return "SpaceShooter_screenshot_" + Miscellaneous.getFormattedDate() + "_" + Miscellaneous.getFormattedTime() + ".png";
+	}
+
+	private static final void initializeImages() {
+		try {
+			playerBullet = ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/playerBullet.png")));
+			enemy = ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/enemy.png")));
+			enemyBullet = ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/enemyBullet.png")));
+			heart = ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/heart.png")));
+			emptyHeart = ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/emptyHeart.png")));
+			for (int i : Miscellaneous.range(17))
+				explosionFrames.add(ImageIO.read(Miscellaneous.getResourceAsStream("images/explosion/frame_" + i + ".png")));
+			overlay = new BufferedImage(1080, 720, BufferedImage.TYPE_INT_ARGB);
+			Graphics2D g = (Graphics2D) overlay.getGraphics();
+			g.setColor(new Color(0f, 0f, 0f, 0.5f));
+			g.fillRect(0, 0, 1080, 720);
+			BufferedImage tempBoss = new BufferedImage(180, 160, BufferedImage.TYPE_INT_ARGB);
+			tempBoss.createGraphics().drawImage(ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/boss.png"))), 0, 0, 180, 160, 0, 0, 183, 162, null);
+			boss = tempBoss;
+			rocket = ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/rocket.png")));
+			bigBoss = ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/bigBoss.png")));
+			cherry = ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/cherry.png")));
+			battery = ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/battery.png")));
+			laser = new BufferedImage(16, 800, BufferedImage.TYPE_INT_ARGB);
+			Image tempLaser = ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/laser.png")));
+			for (int i : Miscellaneous.range(800 / 32))
+				laser.getGraphics().drawImage(tempLaser, 0, i * 32 - 32, null);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
 	}
 
 	@Override
@@ -308,7 +371,7 @@ public class SpaceShooter extends JPanel {
 				currentHeart.paint(g);
 			if (currentBattery != null)
 				currentBattery.paint(g);
-			if (System.currentTimeMillis() - batteryEatenAt < 5000)
+			if (System.currentTimeMillis() - batteryEatenAt < 4000)
 				laserObj.paint(g);
 			if (System.currentTimeMillis() - cherryEatenAt < 5000)
 				((Graphics2D) g).setComposite(AlphaComposite.SrcOver.derive(0.5f));
@@ -357,8 +420,6 @@ public class SpaceShooter extends JPanel {
 		g.setFont(eightBit.deriveFont(8f));
 		g.drawString("FPS: " + fps, 10, 18);
 		if (System.currentTimeMillis() - fpsLastChecked >= 1000) {
-			if (targetFps < 0 || targetFps == fps)
-				targetFps = framesPassed;
 			fps = framesPassed;
 			fpsLastChecked = System.currentTimeMillis();
 			framesPassed = 0;
@@ -367,7 +428,7 @@ public class SpaceShooter extends JPanel {
 	}
 
 	private void move() {
-		if (Random.randInt(150 - points * 2 < 25 ? 25 : 150 - points * 2) == 0 && !paused && currentBoss == null && currentBigBoss == null)
+		if (Random.randInt(150 - points * 2 < 60 ? 60 : 150 - points * 2) == 0 && !paused && currentBoss == null && currentBigBoss == null)
 			if (points < 45)
 				enemies.add(new Enemy(new Vec2i(Random.randInt(getWidth() - 100), -80)));
 			else
@@ -429,22 +490,26 @@ public class SpaceShooter extends JPanel {
 		if (currentCherry != null && currentCherry.move()) {
 			cherryEatenAt = System.currentTimeMillis();
 			currentCherry = null;
+			playedPowerupSound = false;
+			playSound(Miscellaneous.getResourceAsStream("sounds/powerup.wav"));
 		} else
 			if (currentCherry == null && Random.randInt(6000) == 0)
 				currentCherry = new Cherry(new Vec2i(Random.randInt(getWidth() - 32), -32));
 		if (currentHeart != null && currentHeart.move()) {
 			currentHeart = null;
 			health += 1;
+			playSound(Miscellaneous.getResourceAsStream("sounds/powerup.wav"));
 		} else
 			if (currentHeart == null && health < 3 && Random.randInt(4000) == 0)
 				currentHeart = new Heart(new Vec2i(Random.randInt(getWidth() - 30), -30));
 		if (currentBattery != null && currentBattery.move()) {
 			currentBattery = null;
 			batteryEatenAt = System.currentTimeMillis();
+			playSound(Miscellaneous.getResourceAsStream("sounds/laser.wav"));
 		} else
 			if (currentBattery == null && Random.randInt(6000) == 0)
 				currentBattery = new Battery(new Vec2i(Random.randInt(getWidth() - 16), -32));
-		if (System.currentTimeMillis() - batteryEatenAt < 5000)
+		if (System.currentTimeMillis() - batteryEatenAt < 4000)
 			laserObj.checkDeaths();
 		if (currentCherry != null && currentCherry.location.getY() > getHeight())
 			currentCherry = null;
@@ -452,6 +517,10 @@ public class SpaceShooter extends JPanel {
 			currentHeart = null;
 		if (currentBattery != null && currentBattery.location.getY() > getHeight())
 			currentBattery = null;
+		if (System.currentTimeMillis() - cherryEatenAt > 5000 && !playedPowerupSound) {
+			playSound(Miscellaneous.getResourceAsStream("sounds/powerupEnded.wav"));
+			playedPowerupSound = true;
+		}
 	}
 
 	private void generateBackground() throws IOException {
@@ -459,7 +528,7 @@ public class SpaceShooter extends JPanel {
 			int width = getWidth();
 			int height = getHeight();
 			BufferedImage backgroundTemp = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-			backgroundTemp.createGraphics().drawImage(ImageIO.read(Miscellaneous.getResourceAsStream("images/background.jpg")), 0, 0, width, height, 0, 0, 1920, 1080, null);
+			backgroundTemp.createGraphics().drawImage(ImageIO.read(Miscellaneous.decryptInputStream(Miscellaneous.getResourceAsStream("images/background.jpg"))), 0, 0, width, height, 0, 0, 1920, 1080, null);
 			BufferedImage image = new BufferedImage(width, height * 3, BufferedImage.TYPE_INT_ARGB);
 			Graphics2D g = image.createGraphics();
 			g.drawImage(backgroundTemp, 0, height, null);
@@ -526,25 +595,51 @@ public class SpaceShooter extends JPanel {
 				enemy.kill();
 			for (HardEnemy enemy : hardEnemies)
 				enemy.kill();
-			if (currentBoss != null || currentBigBoss != null) {
-				if (currentBoss != null)
-					currentBoss.kill();
-				else
-					currentBigBoss.kill();
-				currentBoss = null;
-				currentBigBoss = null;
-				health = 0;
-			} else
-				health -= 1;
-			currentBoss = null;
+			health -= 1;
+			playSound(Miscellaneous.getResourceAsStream("sounds/gameOver.wav")).setMicrosecondPosition(1000000);
 			enemyBullets.clear();
 			playerBullets.clear();
 			enemies.clear();
 			hardEnemies.clear();
 			explosions.add(new Explosion(playerLoc));
 			initialize();
-			if (health == 0)
+			if (health == 0) {
+				if (currentBoss != null)
+					currentBoss.kill();
+				else
+					if (currentBigBoss != null)
+						currentBigBoss.kill();
+				currentBoss = null;
+				currentBigBoss = null;
 				dead = true;
+				frame.setCursor(Cursor.getDefaultCursor());
+			}
+		}
+	}
+
+	private Clip playSound(InputStream inputStream) {
+		try {
+			Clip clip = AudioSystem.getClip();
+			clip.open(AudioSystem.getAudioInputStream(inputStream instanceof BufferedInputStream ? inputStream : new BufferedInputStream(inputStream)));
+			Miscellaneous.setVolume(clip, volume / 100f);
+			clip.start();
+			return clip;
+		} catch (Exception e) {
+			e.printStackTrace();
+			return null;
+		}
+	}
+
+	private Clip loopSound(InputStream inputStream, int loop) {
+		try {
+			Clip clip = AudioSystem.getClip();
+			clip.open(AudioSystem.getAudioInputStream(inputStream instanceof BufferedInputStream ? inputStream : new BufferedInputStream(inputStream)));
+			Miscellaneous.setVolume(clip, volume / 100f);
+			clip.loop(loop);
+			return clip;
+		} catch (Exception e) {
+			e.printStackTrace();
+			return null;
 		}
 	}
 
@@ -557,6 +652,7 @@ public class SpaceShooter extends JPanel {
 
 		private PlayerBullet() {
 			location = new Vec2i(playerLoc.getX() + 43, playerLoc.getY());
+			playSound(Miscellaneous.getResourceAsStream("sounds/shot.wav"));
 		}
 
 		private Object move() {
@@ -626,6 +722,7 @@ public class SpaceShooter extends JPanel {
 
 		private EnemyBullet(Vec2i location) {
 			this.location = location;
+			playSound(Miscellaneous.getResourceAsStream("sounds/shot.wav"));
 		}
 
 		private boolean move() {
@@ -662,6 +759,7 @@ public class SpaceShooter extends JPanel {
 			int framesToTravel = ((location.getY() - aimedAt.getY() < 0 ? -(location.getY() - aimedAt.getY()) : location.getY() - aimedAt.getY()) + (location.getX() - aimedAt.getX() < 0 ? -(location.getX() - aimedAt.getX()) : location.getX() - aimedAt.getX())) / 9;
 			xPerFrame = (location.getX() - aimedAt.getX()) / framesToTravel;
 			yPerFrame = (location.getY() - aimedAt.getY()) / framesToTravel;
+			playSound(Miscellaneous.getResourceAsStream("sounds/rocket.wav"));
 		}
 
 		private boolean move() {
@@ -1067,6 +1165,7 @@ public class SpaceShooter extends JPanel {
 		private Explosion(Vec2i location, boolean isBossExplosion) {
 			this.location = location;
 			this.isBossExplosion = isBossExplosion;
+			playSound(Miscellaneous.getResourceAsStream("sounds/explosion.wav"));
 		}
 
 		private boolean move() {
